@@ -1,0 +1,6 @@
+{
+  "name": "COMBINE",
+  "description": "Academic research platform for collaborative cellular bandwidth pooling over Wi-Fi Direct",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
