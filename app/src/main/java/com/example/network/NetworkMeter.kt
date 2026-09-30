@@ -15,9 +15,16 @@ import android.telephony.CellSignalStrength
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 
+enum class SignalQuality {
+    STRONG,   // > -70 dBm
+    MEDIUM,   // -70 to -90 dBm
+    WEAK,     // < -90 dBm
+    UNKNOWN
+}
+
 /**
  * Helper utility to probe network type, signal strength (RSSI/dBm),
- * and battery percentage for academic measurement runs.
+ * carrier name, and battery percentage for baseline benchmark runs.
  */
 class NetworkMeter(private val context: Context) {
 
@@ -44,14 +51,14 @@ class NetworkMeter(private val context: Context) {
 
     fun getDeviceDescription(): String {
         return if (isEmulator()) {
-            "Cloud Virtual Emulator (Google Cloud Datacenter)"
+            "Cloud Virtual Emulator (Google Datacenter)"
         } else {
             "${Build.MANUFACTURER} ${Build.MODEL}".trim()
         }
     }
 
     /**
-     * Determines current active network type: "WiFi", "4G (LTE)", "5G", "3G", or "Cellular".
+     * Determines current active network type: "WiFi", "5G", "4G (LTE)", "3G", or "Cellular".
      */
     fun getNetworkType(): String {
         val cm = connectivityManager ?: return "Unknown"
@@ -66,6 +73,38 @@ class NetworkMeter(private val context: Context) {
         }
     }
 
+    /**
+     * Returns true if currently connected to WiFi.
+     */
+    fun isWiFiActive(): Boolean {
+        val cm = connectivityManager ?: return false
+        val active = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(active) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
+    /**
+     * Returns true if currently connected to Cellular.
+     */
+    fun isCellularActive(): Boolean {
+        val cm = connectivityManager ?: return false
+        val active = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(active) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+    }
+
+    /**
+     * Carrier operator name if cellular is available (e.g., "T-Mobile", "Verizon", "Jio").
+     */
+    fun getCarrierName(): String? {
+        val tm = telephonyManager ?: return null
+        val netName = tm.networkOperatorName
+        if (!netName.isNullOrBlank()) return netName
+        val simName = tm.simOperatorName
+        if (!simName.isNullOrBlank()) return simName
+        return null
+    }
+
     private fun getCellularNetworkType(): String {
         val tm = telephonyManager ?: return "Cellular"
 
@@ -75,7 +114,6 @@ class NetworkMeter(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
 
         if (!hasPhoneStatePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Without phone state permission on Android 10+, fallback to generic Cellular
             return "Cellular"
         }
 
@@ -122,7 +160,6 @@ class NetworkMeter(private val context: Context) {
 
         // 2. If Cellular is connected
         if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-            // Try API 29+ TelephonyManager SignalStrength
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
                     val ss = telephonyManager?.signalStrength
@@ -135,11 +172,10 @@ class NetworkMeter(private val context: Context) {
                         return "Level ${primarySignal.level}/4"
                     }
                 } catch (_: Exception) {
-                    // Ignore and fallback
+                    // Fallback
                 }
             }
 
-            // Check NetworkCapabilities signal strength (API 29+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && caps.signalStrength != NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED) {
                 return "${caps.signalStrength} dBm"
             }
@@ -151,10 +187,29 @@ class NetworkMeter(private val context: Context) {
     }
 
     /**
+     * Extracts numerical dBm if present (e.g. "-65 dBm" -> -65.0)
+     */
+    fun extractDbmValue(signalStr: String): Double? {
+        val match = Regex("(-?\\d+)\\s*dBm", RegexOption.IGNORE_CASE).find(signalStr)
+        return match?.groupValues?.get(1)?.toDoubleOrNull()
+    }
+
+    /**
+     * Classifies signal strength into Strong (> -70 dBm), Medium (-70 to -90 dBm), Weak (< -90 dBm)
+     */
+    fun evaluateSignalQuality(signalStr: String): SignalQuality {
+        val dbm = extractDbmValue(signalStr) ?: return SignalQuality.UNKNOWN
+        return when {
+            dbm > -70.0 -> SignalQuality.STRONG   // e.g. -50 dBm, -65 dBm
+            dbm >= -90.0 -> SignalQuality.MEDIUM  // -70 dBm to -90 dBm
+            else -> SignalQuality.WEAK            // -91 dBm to -120 dBm
+        }
+    }
+
+    /**
      * Returns current battery percentage (0-100).
      */
     fun getBatteryPercentage(): Int {
-        // Method 1: BatteryManager property capacity
         try {
             val capacity = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
             if (capacity in 0..100) {
@@ -164,7 +219,6 @@ class NetworkMeter(private val context: Context) {
             // Ignore
         }
 
-        // Method 2: Sticky Intent fallback
         return try {
             val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
             val batteryStatus = context.registerReceiver(null, intentFilter)

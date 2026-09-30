@@ -35,6 +35,9 @@ class DownloadEngine(
 
     suspend fun runBenchmark(
         fileUrl: String,
+        testConditionNote: String = "",
+        batchId: String = "",
+        runNumberInBatch: String = "",
         onProgress: (DownloadProgress) -> Unit
     ): Result<TestRunResult> = withContext(Dispatchers.IO) {
         try {
@@ -135,7 +138,10 @@ class DownloadEngine(
                 totalTimeSeconds = totalTimeSeconds,
                 throughputKbps = throughputKbps,
                 batteryBefore = batteryBefore,
-                batteryAfter = batteryAfter
+                batteryAfter = batteryAfter,
+                testConditionNote = testConditionNote,
+                batchId = batchId,
+                runNumberInBatch = runNumberInBatch
             )
 
             // Persist to CSV

@@ -13,11 +13,14 @@ import java.util.Locale
 /**
  * Manages persisting benchmark runs to combine_logs.csv and
  * sharing the CSV via Android FileProvider.
+ *
+ * Updated schema:
+ * timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,test_condition_note,batch_id,run_number_in_batch
  */
 class TestLogManager(private val context: Context) {
 
     private val csvFileName = "combine_logs.csv"
-    private val csvHeader = "timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after"
+    val csvHeader = "timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,test_condition_note,batch_id,run_number_in_batch"
 
     private val logFile: File
         get() {
@@ -34,6 +37,16 @@ class TestLogManager(private val context: Context) {
         if (!file.exists() || file.length() == 0L) {
             file.parentFile?.mkdirs()
             file.writeText("$csvHeader\n")
+        } else {
+            // Check if existing file has old header, upgrade header if only old header present
+            val firstLine = file.useLines { it.firstOrNull() }
+            if (firstLine != null && !firstLine.contains("test_condition_note")) {
+                // If it was just an empty file with only the old header:
+                val lines = file.readLines()
+                if (lines.size <= 1) {
+                    file.writeText("$csvHeader\n")
+                }
+            }
         }
     }
 
@@ -52,7 +65,10 @@ class TestLogManager(private val context: Context) {
             append(String.format(Locale.US, "%.3f", result.totalTimeSeconds)).append(",")
             append(String.format(Locale.US, "%.2f", result.throughputKbps)).append(",")
             append(result.batteryBefore).append(",")
-            append(result.batteryAfter).append("\n")
+            append(result.batteryAfter).append(",")
+            append(escapeCsv(result.testConditionNote)).append(",")
+            append(escapeCsv(result.batchId)).append(",")
+            append(escapeCsv(result.runNumberInBatch)).append("\n")
         }
 
         FileWriter(logFile, true).use { writer ->
@@ -77,6 +93,10 @@ class TestLogManager(private val context: Context) {
             val tokens = parseCsvLine(line)
             if (tokens.size >= 9) {
                 try {
+                    val note = tokens.getOrElse(9) { "" }
+                    val bId = tokens.getOrElse(10) { "" }
+                    val rNum = tokens.getOrElse(11) { "" }
+
                     results.add(
                         TestRunResult(
                             timestamp = tokens[0],
@@ -87,7 +107,10 @@ class TestLogManager(private val context: Context) {
                             totalTimeSeconds = tokens[5].toDoubleOrNull() ?: 0.0,
                             throughputKbps = tokens[6].toDoubleOrNull() ?: 0.0,
                             batteryBefore = tokens[7].toIntOrNull() ?: 0,
-                            batteryAfter = tokens[8].toIntOrNull() ?: 0
+                            batteryAfter = tokens[8].toIntOrNull() ?: 0,
+                            testConditionNote = note,
+                            batchId = bId,
+                            runNumberInBatch = rNum
                         )
                     )
                 } catch (_: Exception) {
