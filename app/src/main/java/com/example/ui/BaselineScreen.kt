@@ -244,8 +244,8 @@ fun BaselineScreen(
                         OutlinedTextField(
                             value = uiState.fileUrl,
                             onValueChange = { viewModel.onUrlChanged(it) },
-                            label = { Text("File URL") },
-                            placeholder = { Text("https://example.com/testfile.bin") },
+                            label = { Text("Benchmark File URL") },
+                            placeholder = { Text("https://www.mediafire.com/file/q16udyq3g97g208/GGC.apk/file") },
                             singleLine = false,
                             maxLines = 3,
                             enabled = !uiState.isDownloading,
@@ -253,46 +253,6 @@ fun BaselineScreen(
                                 .fillMaxWidth()
                                 .testTag("file_url_input")
                         )
-
-                        // Quick Test Presets
-                        Text(
-                            text = "Quick Presets:",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            PresetChip(
-                                label = "5 MB",
-                                enabled = !uiState.isDownloading,
-                                onClick = {
-                                    viewModel.setQuickUrl("https://speed.cloudflare.com/__down?bytes=5242880")
-                                }
-                            )
-                            PresetChip(
-                                label = "10 MB",
-                                enabled = !uiState.isDownloading,
-                                onClick = {
-                                    viewModel.setQuickUrl("https://speed.cloudflare.com/__down?bytes=10485760")
-                                }
-                            )
-                            PresetChip(
-                                label = "25 MB",
-                                enabled = !uiState.isDownloading,
-                                onClick = {
-                                    viewModel.setQuickUrl("https://speed.cloudflare.com/__down?bytes=26214400")
-                                }
-                            )
-                            PresetChip(
-                                label = "50 MB",
-                                enabled = !uiState.isDownloading,
-                                onClick = {
-                                    viewModel.setQuickUrl("https://speed.cloudflare.com/__down?bytes=52428800")
-                                }
-                            )
-                        }
 
                         Spacer(modifier = Modifier.height(4.dp))
 
@@ -448,21 +408,6 @@ fun BaselineScreen(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun PresetChip(
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RoundedCornerShape(8.dp)
-    ) {
-        Text(text = label, style = MaterialTheme.typography.labelSmall)
     }
 }
 

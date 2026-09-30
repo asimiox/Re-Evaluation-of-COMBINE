@@ -38,14 +38,23 @@ class DownloadEngine(
         onProgress: (DownloadProgress) -> Unit
     ): Result<TestRunResult> = withContext(Dispatchers.IO) {
         try {
+            // Resolve direct download URL if this is a MediaFire share page
+            val directUrl = resolveDirectUrlIfNeeded(fileUrl.trim())
+
+            if (!directUrl.startsWith("http://", ignoreCase = true) && !directUrl.startsWith("https://", ignoreCase = true)) {
+                return@withContext Result.failure(
+                    Exception("Invalid URL scheme: must start with http:// or https:// ($directUrl)")
+                )
+            }
+
             // Snapshot initial device metrics
             val networkTypeAtStart = networkMeter.getNetworkType()
             val signalStrengthAtStart = networkMeter.getSignalStrength()
             val batteryBefore = networkMeter.getBatteryPercentage()
 
             val request = Request.Builder()
-                .url(fileUrl)
-                .header("User-Agent", "COMBINE-Benchmark/1.0 (Android Academic Research)")
+                .url(directUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) COMBINE-Benchmark/1.0")
                 .build()
 
             val startTimeWall = System.currentTimeMillis()
@@ -60,10 +69,20 @@ class DownloadEngine(
                 )
             }
 
+            val contentType = response.header("Content-Type").orEmpty().lowercase()
             val body = response.body
                 ?: return@withContext Result.failure(Exception("Response body is empty"))
 
             val contentLength = body.contentLength()
+
+            // Guard against accidentally benchmarking an HTML web page
+            if (contentType.contains("text/html") && contentLength in 0..1000000) {
+                body.close()
+                return@withContext Result.failure(
+                    Exception("The URL returned an HTML web page instead of the actual file. Please verify it is a direct download link.")
+                )
+            }
+
             var totalBytesRead = 0L
             val buffer = ByteArray(64 * 1024) // 64 KB buffer
 
@@ -126,5 +145,91 @@ class DownloadEngine(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun resolveDirectUrlIfNeeded(url: String): String {
+        val cleanUrl = url.trim()
+        if (!cleanUrl.contains("mediafire.com/file/", ignoreCase = true)) {
+            return normalizeUrl(cleanUrl)
+        }
+
+        return try {
+            val pageRequest = Request.Builder()
+                .url(cleanUrl)
+                .header(
+                    "User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                )
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+
+            client.newCall(pageRequest).execute().use { response ->
+                if (!response.isSuccessful) return cleanUrl
+                val html = response.body?.string().orEmpty()
+
+                // 1. Direct mediafire download subdomain (https://downloadXXXX.mediafire.com/...)
+                val regexDirect = Regex(
+                    """href=["'](https?://download[^"']*mediafire\.com/[^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                val matchDirect = regexDirect.find(html)
+                if (matchDirect != null) {
+                    return normalizeUrl(matchDirect.groupValues[1])
+                }
+
+                // 2. Download button anchor: id="downloadButton"
+                val regexBtn1 = Regex(
+                    """id=["']downloadButton["'][^>]*href=["']([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                val matchBtn1 = regexBtn1.find(html)
+                if (matchBtn1 != null) {
+                    val raw = matchBtn1.groupValues[1].trim()
+                    if (raw.isNotBlank() && raw != "#") {
+                        return normalizeUrl(raw)
+                    }
+                }
+
+                val regexBtn2 = Regex(
+                    """href=["']([^"']+)["'][^>]*id=["']downloadButton["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                val matchBtn2 = regexBtn2.find(html)
+                if (matchBtn2 != null) {
+                    val raw = matchBtn2.groupValues[1].trim()
+                    if (raw.isNotBlank() && raw != "#") {
+                        return normalizeUrl(raw)
+                    }
+                }
+
+                // 3. Aria-label anchor
+                val regexAria = Regex(
+                    """aria-label=["']Download file["'][^>]*href=["']([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                val matchAria = regexAria.find(html)
+                if (matchAria != null) {
+                    val raw = matchAria.groupValues[1].trim()
+                    if (raw.isNotBlank() && raw != "#") {
+                        return normalizeUrl(raw)
+                    }
+                }
+
+                cleanUrl
+            }
+        } catch (_: Exception) {
+            cleanUrl
+        }
+    }
+
+    private fun normalizeUrl(url: String): String {
+        var u = url.trim()
+        if (u.startsWith("//")) {
+            u = "https:$u"
+        } else if (u.startsWith("/")) {
+            u = "https://www.mediafire.com$u"
+        }
+        return u
     }
 }

@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class BaselineUiState(
-    val fileUrl: String = "https://speed.cloudflare.com/__down?bytes=10485760", // 10MB default
+    val fileUrl: String = "https://www.mediafire.com/file/q16udyq3g97g208/GGC.apk/file",
     val isDownloading: Boolean = false,
     val progress: DownloadProgress? = null,
     val latestResult: TestRunResult? = null,
@@ -46,8 +46,8 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = _uiState.value.copy(fileUrl = newUrl, errorMessage = null)
     }
 
-    fun setQuickUrl(presetUrl: String) {
-        _uiState.value = _uiState.value.copy(fileUrl = presetUrl, errorMessage = null)
+    fun selectBenchmarkUrl(url: String) {
+        _uiState.value = _uiState.value.copy(fileUrl = url, errorMessage = null)
     }
 
     fun refreshDeviceInfo() {
