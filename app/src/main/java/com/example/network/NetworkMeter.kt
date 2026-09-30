@@ -30,6 +30,26 @@ class NetworkMeter(private val context: Context) {
     private val batteryManager =
         context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
 
+    fun isEmulator(): Boolean {
+        return (Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || Build.PRODUCT.contains("sdk_gphone"))
+    }
+
+    fun getDeviceDescription(): String {
+        return if (isEmulator()) {
+            "Cloud Virtual Emulator (Google Cloud Datacenter)"
+        } else {
+            "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+        }
+    }
+
     /**
      * Determines current active network type: "WiFi", "4G (LTE)", "5G", "3G", or "Cellular".
      */
