@@ -530,7 +530,7 @@ private fun TestSetupSection(
             // Preset Speed-Test Files (Hetzner)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = "Reliable Test Files (Hetzner Mirrors):",
+                    text = "Reliable Speed-Test Files (Direct CDN & Mirrors):",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold
                 )

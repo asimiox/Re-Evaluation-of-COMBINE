@@ -7,9 +7,12 @@ import com.example.network.NetworkMeter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.InputStream
+import java.net.InetAddress
+import java.net.UnknownHostException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -22,11 +25,40 @@ data class DownloadProgress(
     val currentSpeedKbps: Double
 )
 
+private class RobustDns : Dns {
+    override fun lookup(hostname: String): List<InetAddress> {
+        try {
+            val addresses = Dns.SYSTEM.lookup(hostname)
+            if (addresses.isNotEmpty()) {
+                return addresses
+            }
+        } catch (_: Exception) {
+            // Fall through to fallback
+        }
+
+        // Hardcoded Anycast IPs if carrier/local DNS lookup fails
+        return when {
+            hostname.equals("speed.cloudflare.com", ignoreCase = true) -> {
+                listOf(
+                    InetAddress.getByName("104.16.123.96"),
+                    InetAddress.getByName("104.16.124.96")
+                )
+            }
+            hostname.contains("hetzner", ignoreCase = true) -> {
+                listOf(InetAddress.getByName("78.46.170.2"))
+            }
+            else -> throw UnknownHostException("Unable to resolve host \"$hostname\": check your device internet connection.")
+        }
+    }
+}
+
 class DownloadEngine(
     private val networkMeter: NetworkMeter,
     private val logManager: TestLogManager
 ) {
     private val client = OkHttpClient.Builder()
+        .dns(RobustDns())
+        .retryOnConnectionFailure(true)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
@@ -154,7 +186,19 @@ class DownloadEngine(
     }
 
     private fun resolveDirectUrlIfNeeded(url: String): String {
-        val cleanUrl = url.trim()
+        var cleanUrl = url.trim()
+
+        // Remap discontinued speed.hetzner.de URLs to working endpoints
+        if (cleanUrl.contains("speed.hetzner.de/10MB.bin", ignoreCase = true)) {
+            return "https://speed.cloudflare.com/__down?bytes=10000000"
+        }
+        if (cleanUrl.contains("speed.hetzner.de/100MB.bin", ignoreCase = true)) {
+            return "https://fsn1-speed.hetzner.com/100MB.bin"
+        }
+        if (cleanUrl.contains("speed.hetzner.de/1GB.bin", ignoreCase = true)) {
+            return "https://fsn1-speed.hetzner.com/1GB.bin"
+        }
+
         if (!cleanUrl.contains("mediafire.com/file/", ignoreCase = true)) {
             return normalizeUrl(cleanUrl)
         }

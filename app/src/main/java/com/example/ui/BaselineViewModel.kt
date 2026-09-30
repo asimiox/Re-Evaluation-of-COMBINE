@@ -35,22 +35,29 @@ val HETZNER_PRESET_FILES = listOf(
         id = "small_10mb",
         label = "Small (10MB)",
         sizeLabel = "10 MB",
-        url = "https://speed.hetzner.de/10MB.bin",
-        description = "Fastest turnaround; ideal for 10-30 batch tests"
+        url = "https://speed.cloudflare.com/__down?bytes=10000000",
+        description = "Cloudflare Global Anycast (Fast & 100% reliable for batch runs)"
     ),
     PresetFile(
-        id = "med_100mb",
-        label = "Medium (100MB)",
+        id = "med_25mb",
+        label = "Medium (25MB)",
+        sizeLabel = "25 MB",
+        url = "https://speed.cloudflare.com/__down?bytes=25000000",
+        description = "Cloudflare Anycast 25MB test file for mobile broadband"
+    ),
+    PresetFile(
+        id = "large_100mb",
+        label = "Large (100MB)",
         sizeLabel = "100 MB",
-        url = "https://speed.hetzner.de/100MB.bin",
-        description = "Standard benchmark for broadband & 4G/5G"
+        url = "https://speed.cloudflare.com/__down?bytes=100000000",
+        description = "Cloudflare Anycast 100MB high-throughput test"
     ),
     PresetFile(
-        id = "large_1gb",
-        label = "Large (1GB)",
-        sizeLabel = "1 GB",
-        url = "https://speed.hetzner.de/1GB.bin",
-        description = "Sustained high-bandwidth stress testing"
+        id = "hetzner_100mb",
+        label = "Hetzner (100MB)",
+        sizeLabel = "100 MB",
+        url = "https://fsn1-speed.hetzner.com/100MB.bin",
+        description = "Hetzner Falkenstein official datacenter mirror"
     )
 )
 
@@ -64,7 +71,7 @@ val CONDITION_NOTE_PRESETS = listOf(
 )
 
 data class BaselineUiState(
-    val fileUrl: String = "https://speed.hetzner.de/10MB.bin",
+    val fileUrl: String = "https://speed.cloudflare.com/__down?bytes=10000000",
     val selectedPresetId: String? = "small_10mb",
     val conditionNote: String = "Indoor",
     val batchRunsPlannedCount: Int = 10,
