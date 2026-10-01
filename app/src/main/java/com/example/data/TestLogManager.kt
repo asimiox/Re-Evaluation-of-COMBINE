@@ -15,12 +15,12 @@ import java.util.Locale
  * sharing the CSV via Android FileProvider.
  *
  * Updated schema:
- * timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,test_condition_note,batch_id,run_number_in_batch
+ * timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,is_charging,test_condition_note,batch_id,run_number_in_batch
  */
 class TestLogManager(private val context: Context) {
 
     private val csvFileName = "combine_logs.csv"
-    val csvHeader = "timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,test_condition_note,batch_id,run_number_in_batch"
+    val csvHeader = "timestamp,file_url,file_size_bytes,network_type,signal_strength,total_time_seconds,throughput_kbps,battery_before,battery_after,is_charging,test_condition_note,batch_id,run_number_in_batch"
 
     private val logFile: File
         get() {
@@ -38,14 +38,10 @@ class TestLogManager(private val context: Context) {
             file.parentFile?.mkdirs()
             file.writeText("$csvHeader\n")
         } else {
-            // Check if existing file has old header, upgrade header if only old header present
-            val firstLine = file.useLines { it.firstOrNull() }
-            if (firstLine != null && !firstLine.contains("test_condition_note")) {
-                // If it was just an empty file with only the old header:
-                val lines = file.readLines()
-                if (lines.size <= 1) {
-                    file.writeText("$csvHeader\n")
-                }
+            // Check if existing file has old header without is_charging
+            val lines = file.readLines()
+            if (lines.size <= 1) {
+                file.writeText("$csvHeader\n")
             }
         }
     }
@@ -66,6 +62,7 @@ class TestLogManager(private val context: Context) {
             append(String.format(Locale.US, "%.2f", result.throughputKbps)).append(",")
             append(result.batteryBefore).append(",")
             append(result.batteryAfter).append(",")
+            append(result.isCharging).append(",")
             append(escapeCsv(result.testConditionNote)).append(",")
             append(escapeCsv(result.batchId)).append(",")
             append(escapeCsv(result.runNumberInBatch)).append("\n")
@@ -88,14 +85,30 @@ class TestLogManager(private val context: Context) {
         val lines = file.readLines()
         if (lines.size <= 1) return emptyList()
 
+        val headerLine = lines.first()
+        val hasIsChargingColumn = headerLine.contains("is_charging")
+
         for (line in lines.drop(1)) {
             if (line.isBlank()) continue
             val tokens = parseCsvLine(line)
             if (tokens.size >= 9) {
                 try {
-                    val note = tokens.getOrElse(9) { "" }
-                    val bId = tokens.getOrElse(10) { "" }
-                    val rNum = tokens.getOrElse(11) { "" }
+                    val isCharging: Boolean
+                    val note: String
+                    val bId: String
+                    val rNum: String
+
+                    if (hasIsChargingColumn && tokens.size >= 10) {
+                        isCharging = tokens[9].equals("true", ignoreCase = true)
+                        note = tokens.getOrElse(10) { "" }
+                        bId = tokens.getOrElse(11) { "" }
+                        rNum = tokens.getOrElse(12) { "" }
+                    } else {
+                        isCharging = false
+                        note = tokens.getOrElse(9) { "" }
+                        bId = tokens.getOrElse(10) { "" }
+                        rNum = tokens.getOrElse(11) { "" }
+                    }
 
                     results.add(
                         TestRunResult(
@@ -108,6 +121,7 @@ class TestLogManager(private val context: Context) {
                             throughputKbps = tokens[6].toDoubleOrNull() ?: 0.0,
                             batteryBefore = tokens[7].toIntOrNull() ?: 0,
                             batteryAfter = tokens[8].toIntOrNull() ?: 0,
+                            isCharging = isCharging,
                             testConditionNote = note,
                             batchId = bId,
                             runNumberInBatch = rNum

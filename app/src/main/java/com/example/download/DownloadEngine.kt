@@ -7,6 +7,7 @@ import com.example.network.NetworkMeter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -65,6 +66,20 @@ class DownloadEngine(
         .followSslRedirects(true)
         .build()
 
+    @Volatile
+    private var activeCall: Call? = null
+
+    /**
+     * Immediately cancels any currently running network download.
+     */
+    fun cancelActiveDownload() {
+        try {
+            activeCall?.cancel()
+        } catch (_: Exception) {
+            // Ignore
+        }
+    }
+
     suspend fun runBenchmark(
         fileUrl: String,
         testConditionNote: String = "",
@@ -72,8 +87,18 @@ class DownloadEngine(
         runNumberInBatch: String = "",
         onProgress: (DownloadProgress) -> Unit
     ): Result<TestRunResult> = withContext(Dispatchers.IO) {
+        val startTimeWall = System.currentTimeMillis()
+        val startClock = SystemClock.elapsedRealtime()
+
+        // Snapshot initial device metrics
+        val networkTypeAtStart = networkMeter.getNetworkType()
+        val signalStrengthAtStart = networkMeter.getSignalStrength()
+        val batteryBefore = networkMeter.getBatteryPercentage()
+        val isChargingAtStart = networkMeter.isDeviceCharging()
+        var totalBytesRead = 0L
+
         try {
-            // Resolve direct download URL if this is a MediaFire share page
+            // Resolve direct download URL if this is a MediaFire share page or old link
             val directUrl = resolveDirectUrlIfNeeded(fileUrl.trim())
 
             if (!directUrl.startsWith("http://", ignoreCase = true) && !directUrl.startsWith("https://", ignoreCase = true)) {
@@ -82,105 +107,128 @@ class DownloadEngine(
                 )
             }
 
-            // Snapshot initial device metrics
-            val networkTypeAtStart = networkMeter.getNetworkType()
-            val signalStrengthAtStart = networkMeter.getSignalStrength()
-            val batteryBefore = networkMeter.getBatteryPercentage()
-
             val request = Request.Builder()
                 .url(directUrl)
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) COMBINE-Benchmark/1.0")
                 .build()
 
-            val startTimeWall = System.currentTimeMillis()
-            val startClock = SystemClock.elapsedRealtime()
-
             val call = client.newCall(request)
-            val response = call.execute()
+            activeCall = call
 
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(
-                    Exception("HTTP ${response.code}: ${response.message}")
-                )
-            }
+            try {
+                val response = call.execute()
 
-            val contentType = response.header("Content-Type").orEmpty().lowercase()
-            val body = response.body
-                ?: return@withContext Result.failure(Exception("Response body is empty"))
+                if (!response.isSuccessful) {
+                    throw Exception("HTTP ${response.code}: ${response.message}")
+                }
 
-            val contentLength = body.contentLength()
+                val contentType = response.header("Content-Type").orEmpty().lowercase()
+                val body = response.body
+                    ?: throw Exception("Response body is empty")
 
-            // Guard against accidentally benchmarking an HTML web page
-            if (contentType.contains("text/html") && contentLength in 0..1000000) {
-                body.close()
-                return@withContext Result.failure(
-                    Exception("The URL returned an HTML web page instead of the actual file. Please verify it is a direct download link.")
-                )
-            }
+                val contentLength = body.contentLength()
 
-            var totalBytesRead = 0L
-            val buffer = ByteArray(64 * 1024) // 64 KB buffer
+                // Guard against accidentally benchmarking an HTML web page
+                if (contentType.contains("text/html") && contentLength in 0..1000000) {
+                    body.close()
+                    throw Exception("The URL returned an HTML web page instead of the actual file.")
+                }
 
-            val inputStream: InputStream = body.byteStream()
-            var lastProgressEmit = startClock
+                val buffer = ByteArray(64 * 1024) // 64 KB buffer
+                val inputStream: InputStream = body.byteStream()
+                var lastProgressEmit = startClock
 
-            inputStream.use { stream ->
-                while (true) {
-                    coroutineContext.ensureActive()
-                    val read = stream.read(buffer)
-                    if (read == -1) break
-                    totalBytesRead += read
+                inputStream.use { stream ->
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val read = stream.read(buffer)
+                        if (read == -1) break
+                        totalBytesRead += read
 
-                    val now = SystemClock.elapsedRealtime()
-                    // Throttle UI progress updates to every 100ms
-                    if (now - lastProgressEmit >= 100) {
-                        val elapsedSec = (now - startClock) / 1000.0
-                        val currentSpeed = if (elapsedSec > 0) {
-                            ((totalBytesRead * 8.0) / 1000.0) / elapsedSec
-                        } else 0.0
+                        val now = SystemClock.elapsedRealtime()
+                        // Throttle UI progress updates to every 100ms
+                        if (now - lastProgressEmit >= 100) {
+                            val elapsedSec = (now - startClock) / 1000.0
+                            val currentSpeed = if (elapsedSec > 0) {
+                                ((totalBytesRead * 8.0) / 1000.0) / elapsedSec
+                            } else 0.0
 
-                        onProgress(
-                            DownloadProgress(
-                                bytesDownloaded = totalBytesRead,
-                                totalBytesExpected = contentLength,
-                                elapsedSeconds = elapsedSec,
-                                currentSpeedKbps = currentSpeed
+                            onProgress(
+                                DownloadProgress(
+                                    bytesDownloaded = totalBytesRead,
+                                    totalBytesExpected = contentLength,
+                                    elapsedSeconds = elapsedSec,
+                                    currentSpeedKbps = currentSpeed
+                                )
                             )
-                        )
-                        lastProgressEmit = now
+                            lastProgressEmit = now
+                        }
                     }
                 }
-            }
 
+                val endClock = SystemClock.elapsedRealtime()
+                val totalTimeSeconds = maxOf((endClock - startClock) / 1000.0, 0.001)
+                val batteryAfter = networkMeter.getBatteryPercentage()
+
+                // Throughput in Kbps = (bytes * 8 bits / 1000) / totalTimeSeconds
+                val throughputKbps = ((totalBytesRead * 8.0) / 1000.0) / totalTimeSeconds
+                val timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(startTimeWall))
+
+                val testResult = TestRunResult(
+                    timestamp = timestampStr,
+                    fileUrl = fileUrl,
+                    fileSizeBytes = totalBytesRead,
+                    networkType = networkTypeAtStart,
+                    signalStrength = signalStrengthAtStart,
+                    totalTimeSeconds = totalTimeSeconds,
+                    throughputKbps = throughputKbps,
+                    batteryBefore = batteryBefore,
+                    batteryAfter = batteryAfter,
+                    isCharging = isChargingAtStart,
+                    testConditionNote = testConditionNote,
+                    batchId = batchId,
+                    runNumberInBatch = runNumberInBatch
+                )
+
+                // Persist successful run to CSV
+                logManager.appendTestRun(testResult)
+
+                Result.success(testResult)
+            } finally {
+                if (activeCall == call) {
+                    activeCall = null
+                }
+            }
+        } catch (e: Exception) {
             val endClock = SystemClock.elapsedRealtime()
             val totalTimeSeconds = maxOf((endClock - startClock) / 1000.0, 0.001)
-            val batteryAfter = networkMeter.getBatteryPercentage()
-
-            // Throughput in Kbps = (bytes * 8 bits / 1000) / totalTimeSeconds
-            val throughputKbps = ((totalBytesRead * 8.0) / 1000.0) / totalTimeSeconds
-
+            val isCancelled = activeCall?.isCanceled() == true || e is kotlinx.coroutines.CancellationException
             val timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(startTimeWall))
 
-            val testResult = TestRunResult(
-                timestamp = timestampStr,
-                fileUrl = fileUrl,
-                fileSizeBytes = totalBytesRead,
-                networkType = networkTypeAtStart,
-                signalStrength = signalStrengthAtStart,
-                totalTimeSeconds = totalTimeSeconds,
-                throughputKbps = throughputKbps,
-                batteryBefore = batteryBefore,
-                batteryAfter = batteryAfter,
-                testConditionNote = testConditionNote,
-                batchId = batchId,
-                runNumberInBatch = runNumberInBatch
-            )
+            // For batch runs, log the failed/cancelled run so there is no gap in CSV
+            if (batchId.isNotBlank()) {
+                val statusTag = if (isCancelled) "[CANCELLED]" else "[FAILED: ${e.message?.take(40)}]"
+                val combinedNote = if (testConditionNote.isNotBlank()) "$testConditionNote $statusTag" else statusTag
+                val runStatus = if (isCancelled) "$runNumberInBatch (CANCELLED)" else "$runNumberInBatch (FAILED)"
 
-            // Persist to CSV
-            logManager.appendTestRun(testResult)
+                val failedResult = TestRunResult(
+                    timestamp = timestampStr,
+                    fileUrl = fileUrl,
+                    fileSizeBytes = totalBytesRead,
+                    networkType = networkTypeAtStart,
+                    signalStrength = signalStrengthAtStart,
+                    totalTimeSeconds = totalTimeSeconds,
+                    throughputKbps = 0.0,
+                    batteryBefore = batteryBefore,
+                    batteryAfter = networkMeter.getBatteryPercentage(),
+                    isCharging = isChargingAtStart,
+                    testConditionNote = combinedNote,
+                    batchId = batchId,
+                    runNumberInBatch = runStatus
+                )
+                logManager.appendTestRun(failedResult)
+            }
 
-            Result.success(testResult)
-        } catch (e: Exception) {
             Result.failure(e)
         }
     }
@@ -218,68 +266,42 @@ class DownloadEngine(
                 if (!response.isSuccessful) return cleanUrl
                 val html = response.body?.string().orEmpty()
 
-                // 1. Direct mediafire download subdomain (https://downloadXXXX.mediafire.com/...)
-                val regexDirect = Regex(
-                    """href=["'](https?://download[^"']*mediafire\.com/[^"']+)["']""",
-                    RegexOption.IGNORE_CASE
-                )
-                val matchDirect = regexDirect.find(html)
-                if (matchDirect != null) {
-                    return normalizeUrl(matchDirect.groupValues[1])
-                }
-
-                // 2. Download button anchor: id="downloadButton"
-                val regexBtn1 = Regex(
-                    """id=["']downloadButton["'][^>]*href=["']([^"']+)["']""",
-                    RegexOption.IGNORE_CASE
-                )
-                val matchBtn1 = regexBtn1.find(html)
-                if (matchBtn1 != null) {
-                    val raw = matchBtn1.groupValues[1].trim()
-                    if (raw.isNotBlank() && raw != "#") {
-                        return normalizeUrl(raw)
-                    }
-                }
-
-                val regexBtn2 = Regex(
-                    """href=["']([^"']+)["'][^>]*id=["']downloadButton["']""",
-                    RegexOption.IGNORE_CASE
-                )
-                val matchBtn2 = regexBtn2.find(html)
-                if (matchBtn2 != null) {
-                    val raw = matchBtn2.groupValues[1].trim()
-                    if (raw.isNotBlank() && raw != "#") {
-                        return normalizeUrl(raw)
-                    }
-                }
-
-                // 3. Aria-label anchor
-                val regexAria = Regex(
-                    """aria-label=["']Download file["'][^>]*href=["']([^"']+)["']""",
-                    RegexOption.IGNORE_CASE
-                )
-                val matchAria = regexAria.find(html)
+                val patternAria = Regex("""aria-label="Download file"[^>]*href="(https?://[^"]+)"""", RegexOption.IGNORE_CASE)
+                val matchAria = patternAria.find(html)
                 if (matchAria != null) {
-                    val raw = matchAria.groupValues[1].trim()
-                    if (raw.isNotBlank() && raw != "#") {
-                        return normalizeUrl(raw)
-                    }
+                    return matchAria.groupValues[1]
                 }
 
-                cleanUrl
+                val patternId = Regex("""id="downloadButton"[^>]*href="(https?://[^"]+)"""", RegexOption.IGNORE_CASE)
+                val matchId = patternId.find(html)
+                if (matchId != null) {
+                    return matchId.groupValues[1]
+                }
+
+                val patternGeneral = Regex("""href="(https?://download\d+\.mediafire\.com/[^"]+)"""", RegexOption.IGNORE_CASE)
+                val matchGeneral = patternGeneral.find(html)
+                if (matchGeneral != null) {
+                    return matchGeneral.groupValues[1]
+                }
             }
+            cleanUrl
         } catch (_: Exception) {
             cleanUrl
         }
     }
 
     private fun normalizeUrl(url: String): String {
-        var u = url.trim()
-        if (u.startsWith("//")) {
-            u = "https:$u"
-        } else if (u.startsWith("/")) {
-            u = "https://www.mediafire.com$u"
+        return when {
+            url.contains("drive.google.com/file/d/", ignoreCase = true) -> {
+                val fileId = Regex("""/file/d/([^/]+)""").find(url)?.groupValues?.get(1)
+                if (fileId != null) "https://drive.google.com/uc?export=download&id=$fileId" else url
+            }
+            url.contains("dropbox.com", ignoreCase = true) -> {
+                if (url.endsWith("?dl=0")) url.replace("?dl=0", "?dl=1")
+                else if (!url.contains("?dl=1")) "$url?dl=1"
+                else url
+            }
+            else -> url
         }
-        return u
     }
 }

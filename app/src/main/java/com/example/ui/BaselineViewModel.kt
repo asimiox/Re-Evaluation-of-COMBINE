@@ -83,12 +83,18 @@ data class BaselineUiState(
 
     // Batch Test State
     val isBatchRunning: Boolean = false,
+    val activeBatchId: String? = null,
+    val canResumeBatch: Boolean = false,
     val currentBatchRunNumber: Int = 0,
     val totalBatchRunsPlanned: Int = 10,
     val batchCountdownSeconds: Int = 0,
     val currentBatchDownloadProgress: DownloadProgress? = null,
     val activeBatchRuns: List<TestRunResult> = emptyList(),
     val latestBatchSummary: BatchSummary? = null,
+
+    // Charging & Safeguard Warnings
+    val isCharging: Boolean = false,
+    val chargingWarning: String? = null,
 
     // Logs & Device Metrics
     val errorMessage: String? = null,
@@ -118,6 +124,7 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
 
     private var singleJob: Job? = null
     private var batchJob: Job? = null
+    private var currentBatchId: String? = null
 
     init {
         refreshDeviceInfo()
@@ -160,6 +167,7 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
         val battery = networkMeter.getBatteryPercentage()
         val desc = networkMeter.getDeviceDescription()
         val emulator = networkMeter.isEmulator()
+        val charging = networkMeter.isDeviceCharging()
 
         _uiState.update { it.copy(
             liveNetworkType = netType,
@@ -169,6 +177,8 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
             isWiFiActive = isWifi,
             isCellularActive = isCellular,
             liveBatteryPercentage = battery,
+            isCharging = charging,
+            chargingWarning = if (charging) "Device is charging — battery depletion data for this run will not be reliable." else null,
             deviceDescription = desc,
             isEmulator = emulator
         ) }
@@ -187,12 +197,16 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
+        val isChargingNow = networkMeter.isDeviceCharging()
+
         singleJob?.cancel()
         _uiState.update { it.copy(
             isSingleDownloading = true,
             singleProgress = null,
             latestSingleResult = null,
-            errorMessage = null
+            errorMessage = null,
+            isCharging = isChargingNow,
+            chargingWarning = if (isChargingNow) "Device is charging — battery depletion data for this run will not be reliable." else null
         ) }
 
         singleJob = viewModelScope.launch {
@@ -229,6 +243,7 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun cancelSingleTest() {
+        downloadEngine.cancelActiveDownload()
         singleJob?.cancel()
         singleJob = null
         _uiState.update { it.copy(
@@ -239,34 +254,53 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
         refreshDeviceInfo()
     }
 
-    // --- Batch Test Execution ---
-    fun startBatchTest() {
+    // --- Batch Test Execution (with Batch ID Consistency & Resumption) ---
+    fun startBatchTest(resume: Boolean = false) {
         val currentUrl = _uiState.value.fileUrl.trim()
         if (currentUrl.isBlank() || (!currentUrl.startsWith("http://") && !currentUrl.startsWith("https://"))) {
             _uiState.update { it.copy(errorMessage = "Please select a preset or enter a valid HTTP/HTTPS URL.") }
             return
         }
 
+        val isChargingNow = networkMeter.isDeviceCharging()
         val totalRuns = _uiState.value.batchRunsPlannedCount.coerceIn(1, 30)
         val condition = _uiState.value.conditionNote.trim()
-        val batchId = "batch_${System.currentTimeMillis()}"
+
+        // Batch ID consistency: reuse existing batchId when resuming, or generate one persistent batchId
+        val batchId = if (resume && !currentBatchId.isNullOrBlank()) {
+            currentBatchId!!
+        } else {
+            val newId = "batch_${System.currentTimeMillis()}"
+            currentBatchId = newId
+            newId
+        }
+
+        val completedRuns = if (resume) {
+            _uiState.value.activeBatchRuns.toMutableList()
+        } else {
+            mutableListOf()
+        }
+
+        val startRunIndex = if (resume) completedRuns.size + 1 else 1
 
         batchJob?.cancel()
         _uiState.update { it.copy(
             isBatchRunning = true,
-            currentBatchRunNumber = 0,
+            activeBatchId = batchId,
+            canResumeBatch = false,
+            currentBatchRunNumber = startRunIndex,
             totalBatchRunsPlanned = totalRuns,
             batchCountdownSeconds = 0,
             currentBatchDownloadProgress = null,
-            activeBatchRuns = emptyList(),
+            activeBatchRuns = completedRuns.toList(),
             latestBatchSummary = null,
-            errorMessage = null
+            errorMessage = null,
+            isCharging = isChargingNow,
+            chargingWarning = if (isChargingNow) "Device is charging — battery depletion data for this run will not be reliable." else null
         ) }
 
         batchJob = viewModelScope.launch {
-            val completedRuns = mutableListOf<TestRunResult>()
-
-            for (runIndex in 1..totalRuns) {
+            for (runIndex in startRunIndex..totalRuns) {
                 if (!isActive) break
 
                 _uiState.update { it.copy(
@@ -294,9 +328,10 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
                         ) }
                     },
                     onFailure = { err ->
-                        // Record error message but proceed with countdown if not cancelled
+                        // The failed run was logged with batchId by DownloadEngine
                         _uiState.update { it.copy(
-                            errorMessage = "Run $runIndex encountered error: ${err.message}"
+                            errorMessage = "Run $runIndex failed: ${err.message}",
+                            recentRuns = logManager.readAllTestRuns()
                         ) }
                     }
                 )
@@ -312,10 +347,12 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
             }
 
             val summary = computeBatchSummary(batchId, totalRuns, completedRuns, condition)
+            val allDone = completedRuns.size >= totalRuns
             _uiState.update { it.copy(
                 isBatchRunning = false,
                 currentBatchDownloadProgress = null,
                 batchCountdownSeconds = 0,
+                canResumeBatch = !allDone && completedRuns.isNotEmpty(),
                 latestBatchSummary = summary,
                 recentRuns = logManager.readAllTestRuns()
             ) }
@@ -324,28 +361,42 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun cancelBatchTest() {
+        downloadEngine.cancelActiveDownload()
         batchJob?.cancel()
         batchJob = null
 
         val completed = _uiState.value.activeBatchRuns
         val planned = _uiState.value.totalBatchRunsPlanned
+        val batchId = currentBatchId ?: "batch_cancelled"
         val summary = if (completed.isNotEmpty()) {
-            computeBatchSummary("batch_partial", planned, completed, _uiState.value.conditionNote)
+            computeBatchSummary(batchId, planned, completed, _uiState.value.conditionNote)
         } else null
 
         _uiState.update { it.copy(
             isBatchRunning = false,
             batchCountdownSeconds = 0,
             currentBatchDownloadProgress = null,
+            canResumeBatch = completed.size < planned,
             latestBatchSummary = summary,
             errorMessage = if (completed.isEmpty()) {
-                "Batch test cancelled before completing any runs."
+                "Batch test cancelled. No runs completed. Marked as cancelled in CSV (batch_id: $batchId)."
             } else {
-                "Batch cancelled. ${completed.size} completed runs were logged."
+                "Batch paused/cancelled at ${completed.size} of $planned runs. All runs logged with batch_id: $batchId."
             }
         ) }
         refreshLogs()
         refreshDeviceInfo()
+    }
+
+    fun resetBatchSession() {
+        currentBatchId = null
+        _uiState.update { it.copy(
+            activeBatchId = null,
+            canResumeBatch = false,
+            activeBatchRuns = emptyList(),
+            latestBatchSummary = null,
+            errorMessage = null
+        ) }
     }
 
     private fun computeBatchSummary(
@@ -356,13 +407,14 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
     ): BatchSummary? {
         if (runs.isEmpty()) return null
 
+        val validRuns = runs.filter { it.throughputKbps > 0.0 }
         val count = runs.size
-        val avgThroughput = runs.map { it.throughputKbps }.average()
-        val minThroughput = runs.minOf { it.throughputKbps }
-        val maxThroughput = runs.maxOf { it.throughputKbps }
+        val avgThroughput = if (validRuns.isNotEmpty()) validRuns.map { it.throughputKbps }.average() else 0.0
+        val minThroughput = if (validRuns.isNotEmpty()) validRuns.minOf { it.throughputKbps } else 0.0
+        val maxThroughput = if (validRuns.isNotEmpty()) validRuns.maxOf { it.throughputKbps } else 0.0
 
-        val variance = if (count > 1) {
-            runs.map { (it.throughputKbps - avgThroughput).pow(2) }.average()
+        val variance = if (validRuns.size > 1) {
+            validRuns.map { (it.throughputKbps - avgThroughput).pow(2) }.average()
         } else 0.0
         val stdDev = sqrt(variance)
 
@@ -395,11 +447,14 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
 
     fun clearLogHistory() {
         logManager.clearLogs()
+        currentBatchId = null
         _uiState.update { it.copy(
             recentRuns = emptyList(),
             latestSingleResult = null,
             latestBatchSummary = null,
-            activeBatchRuns = emptyList()
+            activeBatchRuns = emptyList(),
+            activeBatchId = null,
+            canResumeBatch = false
         ) }
     }
 }

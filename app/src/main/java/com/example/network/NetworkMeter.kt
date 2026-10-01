@@ -233,4 +233,25 @@ class NetworkMeter(private val context: Context) {
             0
         }
     }
+
+    /**
+     * Determines whether the device is currently plugged in and charging.
+     */
+    fun isDeviceCharging(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val bm = batteryManager
+            if (bm != null) {
+                return bm.isCharging
+            }
+        }
+
+        return try {
+            val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val batteryStatus = context.registerReceiver(null, intentFilter)
+            val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+        } catch (_: Exception) {
+            false
+        }
+    }
 }

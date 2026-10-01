@@ -216,6 +216,11 @@ fun BaselineScreen(viewModel: BaselineViewModel) {
                     }
                 )
 
+                // Charging Warning Banner
+                if (uiState.isCharging || uiState.chargingWarning != null) {
+                    ChargingWarningBanner()
+                }
+
                 // Non-blocking WiFi safeguard reminder
                 if (uiState.isWiFiActive) {
                     WiFiSafeguardBanner()
@@ -243,7 +248,9 @@ fun BaselineScreen(viewModel: BaselineViewModel) {
                     selectedTab = selectedTestTab,
                     onTabSelected = { selectedTestTab = it },
                     onBatchRunsCountChanged = { viewModel.setBatchRunsCount(it) },
-                    onStartBatch = { viewModel.startBatchTest() },
+                    onStartBatch = { viewModel.startBatchTest(resume = false) },
+                    onResumeBatch = { viewModel.startBatchTest(resume = true) },
+                    onResetBatch = { viewModel.resetBatchSession() },
                     onCancelBatch = { viewModel.cancelBatchTest() },
                     onStartSingle = { viewModel.startSingleTest() },
                     onCancelSingle = { viewModel.cancelSingleTest() }
@@ -393,25 +400,27 @@ private fun DeviceStateSection(
                 }
 
                 // Battery
-                Column(modifier = Modifier.weight(0.8f)) {
+                val batteryIconTint = if (uiState.isCharging) Color(0xFFE65100) else MaterialTheme.colorScheme.primary
+                Column(modifier = Modifier.weight(0.9f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.BatteryChargingFull,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = batteryIconTint,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Battery",
+                            text = if (uiState.isCharging) "Battery (⚡)" else "Battery",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Text(
-                        text = "${uiState.liveBatteryPercentage}%",
+                        text = if (uiState.isCharging) "${uiState.liveBatteryPercentage}% (Charging)" else "${uiState.liveBatteryPercentage}%",
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = if (uiState.isCharging) Color(0xFFE65100) else MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -495,6 +504,36 @@ private fun WiFiSafeguardBanner() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
                 fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChargingWarningBanner() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.BatteryChargingFull,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Device is charging — battery depletion data for this run will not be reliable.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }
@@ -640,6 +679,8 @@ private fun RunTestSection(
     onTabSelected: (Int) -> Unit,
     onBatchRunsCountChanged: (Int) -> Unit,
     onStartBatch: () -> Unit,
+    onResumeBatch: () -> Unit,
+    onResetBatch: () -> Unit,
     onCancelBatch: () -> Unit,
     onStartSingle: () -> Unit,
     onCancelSingle: () -> Unit
@@ -688,8 +729,12 @@ private fun RunTestSection(
                 } else {
                     BatchSetupControls(
                         plannedCount = uiState.batchRunsPlannedCount,
+                        canResume = uiState.canResumeBatch,
+                        completedCount = uiState.activeBatchRuns.size,
                         onCountChanged = onBatchRunsCountChanged,
                         onStartBatch = onStartBatch,
+                        onResumeBatch = onResumeBatch,
+                        onResetBatch = onResetBatch,
                         isEnabled = !uiState.isAnyTestRunning
                     )
                 }
@@ -722,11 +767,57 @@ private fun RunTestSection(
 @Composable
 private fun BatchSetupControls(
     plannedCount: Int,
+    canResume: Boolean,
+    completedCount: Int,
     onCountChanged: (Int) -> Unit,
     onStartBatch: () -> Unit,
+    onResumeBatch: () -> Unit,
+    onResetBatch: () -> Unit,
     isEnabled: Boolean
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (canResume && completedCount > 0 && completedCount < plannedCount) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Incomplete Batch ($completedCount of $plannedCount runs done)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Text(
+                        text = "Resume remaining runs with the same batch_id, or discard to start a new batch.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onResumeBatch,
+                            modifier = Modifier.weight(1f).testTag("resume_batch_button"),
+                            enabled = isEnabled
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Resume (Run ${completedCount + 1})")
+                        }
+                        OutlinedButton(
+                            onClick = onResetBatch,
+                            modifier = Modifier.testTag("reset_batch_button"),
+                            enabled = isEnabled
+                        ) {
+                            Text("New Batch")
+                        }
+                    }
+                }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

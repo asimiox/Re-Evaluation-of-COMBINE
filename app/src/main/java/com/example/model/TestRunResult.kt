@@ -13,6 +13,7 @@ data class TestRunResult(
     val throughputKbps: Double,
     val batteryBefore: Int,
     val batteryAfter: Int,
+    val isCharging: Boolean = false,
     val testConditionNote: String = "",
     val batchId: String = "",
     val runNumberInBatch: String = ""
