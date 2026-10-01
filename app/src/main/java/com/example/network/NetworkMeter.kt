@@ -24,7 +24,7 @@ enum class SignalQuality {
 
 /**
  * Helper utility to probe network type, signal strength (RSSI/dBm),
- * carrier name, and battery percentage for baseline benchmark runs.
+ * carrier name, battery percentage, and charging state for baseline benchmark runs.
  */
 class NetworkMeter(private val context: Context) {
 
@@ -207,6 +207,37 @@ class NetworkMeter(private val context: Context) {
     }
 
     /**
+     * Safe helper to fetch the sticky ACTION_BATTERY_CHANGED intent across all Android versions.
+     */
+    private fun getBatteryIntent(): Intent? {
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+
+        // Try with RECEIVER_NOT_EXPORTED for Android 14+ (API 34+) compatibility
+        try {
+            val intent = ContextCompat.registerReceiver(
+                context,
+                null,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            if (intent != null) return intent
+        } catch (_: Exception) {}
+
+        // Fallback to application context
+        try {
+            val intent = context.applicationContext.registerReceiver(null, filter)
+            if (intent != null) return intent
+        } catch (_: Exception) {}
+
+        // Direct context fallback
+        try {
+            return context.registerReceiver(null, filter)
+        } catch (_: Exception) {}
+
+        return null
+    }
+
+    /**
      * Returns current battery percentage (0-100).
      */
     fun getBatteryPercentage(): Int {
@@ -215,43 +246,73 @@ class NetworkMeter(private val context: Context) {
             if (capacity in 0..100) {
                 return capacity
             }
-        } catch (_: Exception) {
-            // Ignore
+        } catch (_: Exception) {}
+
+        val batteryStatus = getBatteryIntent()
+        if (batteryStatus != null) {
+            val level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) {
+                return ((level.toFloat() / scale.toFloat()) * 100).toInt()
+            }
         }
 
-        return try {
-            val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = context.registerReceiver(null, intentFilter)
-            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            if (level >= 0 && scale > 0) {
-                ((level.toFloat() / scale.toFloat()) * 100).toInt()
-            } else {
-                0
-            }
-        } catch (_: Exception) {
-            0
-        }
+        return 0
     }
 
     /**
      * Determines whether the device is currently plugged in and charging.
+     * Uses a multi-layered check:
+     * 1. Sticky Intent ACTION_BATTERY_CHANGED with EXTRA_PLUGGED (AC, USB, Wireless, Dock)
+     * 2. Sticky Intent ACTION_BATTERY_CHANGED with EXTRA_STATUS (Charging, Full)
+     * 3. BatteryManager.isCharging (API 23+)
+     * 4. BatteryManager.BATTERY_PROPERTY_STATUS (API 26+)
      */
     fun isDeviceCharging(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val bm = batteryManager
-            if (bm != null) {
-                return bm.isCharging
-            }
-        }
+        // Layer 1 & 2: Direct hardware inspection from sticky battery broadcast
+        try {
+            val batteryStatus = getBatteryIntent()
+            if (batteryStatus != null) {
+                val plugged = batteryStatus.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)
+                // Any non-zero plugged value indicates connected to AC (1), USB (2), Wireless (4), or Dock (8)
+                if (plugged > 0 ||
+                    plugged == BatteryManager.BATTERY_PLUGGED_AC ||
+                    plugged == BatteryManager.BATTERY_PLUGGED_USB ||
+                    plugged == BatteryManager.BATTERY_PLUGGED_WIRELESS
+                ) {
+                    return true
+                }
 
-        return try {
-            val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = context.registerReceiver(null, intentFilter)
-            val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
-        } catch (_: Exception) {
-            false
-        }
+                val status = batteryStatus.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                if (status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+                ) {
+                    return true
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Layer 3: BatteryManager.isCharging (API 23+)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (batteryManager?.isCharging == true) {
+                    return true
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Layer 4: BatteryManager BATTERY_PROPERTY_STATUS (API 26+)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val statusProp = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) ?: -1
+                if (statusProp == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    statusProp == BatteryManager.BATTERY_STATUS_FULL
+                ) {
+                    return true
+                }
+            }
+        } catch (_: Exception) {}
+
+        return false
     }
 }

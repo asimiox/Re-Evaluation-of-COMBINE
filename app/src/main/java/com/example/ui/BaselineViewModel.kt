@@ -1,6 +1,11 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.TestLogManager
@@ -126,9 +131,40 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
     private var batchJob: Job? = null
     private var currentBatchId: String? = null
 
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshDeviceInfo()
+        }
+    }
+
     init {
         refreshDeviceInfo()
         refreshLogs()
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        try {
+            ContextCompat.registerReceiver(
+                application,
+                powerReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (_: Exception) {
+            try {
+                application.registerReceiver(powerReceiver, filter)
+            } catch (_: Exception) {}
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            getApplication<Application>().unregisterReceiver(powerReceiver)
+        } catch (_: Exception) {}
     }
 
     fun onUrlChanged(newUrl: String) {

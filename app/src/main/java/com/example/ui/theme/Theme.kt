@@ -1,52 +1,81 @@
 package com.example.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme =
-  darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
-
-private val LightColorScheme =
-  lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+/**
+ * 60-30-10 Rule Theme Implementation for COMBINE
+ */
+private val LightColorScheme = lightColorScheme(
+    primary = NavyDominant,
     onPrimary = Color.White,
-    onSecondary = Color.White,
+    primaryContainer = NavyLightContainer,
+    onPrimaryContainer = NavyDominant,
+
+    secondary = AccentGold,
+    onSecondary = OnAccentGold,
+    secondaryContainer = AccentGoldLight,
+    onSecondaryContainer = OnAccentGold,
+
+    tertiary = NavySecondary,
     onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-  )
+
+    background = CanvasBackground,
+    onBackground = TextNavy,
+
+    surface = BentoCardSurface,
+    onSurface = TextNavy,
+    surfaceVariant = BentoCardSurfaceSubtle,
+    onSurfaceVariant = TextMuted,
+
+    outline = BentoCardBorder,
+    outlineVariant = BentoCardBorderFocused,
+
+    error = AlertErrorText,
+    errorContainer = AlertErrorContainer,
+    onErrorContainer = AlertErrorText
+)
+
+private val DarkColorScheme = darkColorScheme(
+    primary = AccentGold,
+    onPrimary = OnAccentGold,
+    primaryContainer = NavySecondary,
+    onPrimaryContainer = Color.White,
+
+    secondary = AccentGold,
+    onSecondary = OnAccentGold,
+    secondaryContainer = Color(0xFF241E15),
+    onSecondaryContainer = AccentGold,
+
+    tertiary = NavyLightContainer,
+    onTertiary = NavyDark,
+
+    background = Color(0xFF071220),
+    onBackground = Color(0xFFF1F5F9),
+
+    surface = Color(0xFF0F1E33),
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF142640),
+    onSurfaceVariant = Color(0xFF94A3B8),
+
+    outline = Color(0xFF1E3554),
+    outlineVariant = Color(0xFF2B4C77),
+
+    error = Color(0xFFF87171),
+    errorContainer = Color(0xFF450A0A),
+    onErrorContainer = Color(0xFFFECACA)
+)
 
 @Composable
 fun MyApplicationTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  // Dynamic color is available on Android 12+
-  dynamicColor: Boolean = true,
-  content: @Composable () -> Unit,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
 ) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
-
-      darkTheme -> DarkColorScheme
-      else -> LightColorScheme
-    }
-
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    // Explicitly enforce the bespoke 60-30-10 palette rather than dynamic wallpaper colors
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
 }
