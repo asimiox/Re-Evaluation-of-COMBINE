@@ -336,16 +336,24 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
         ) }
 
         batchJob = viewModelScope.launch {
-            for (runIndex in startRunIndex..totalRuns) {
-                if (!isActive) break
+            var currentAttemptIndex = startRunIndex
+            var retryCountForThisRun = 0
 
+            while (currentAttemptIndex <= totalRuns && isActive) {
                 _uiState.update { it.copy(
-                    currentBatchRunNumber = runIndex,
+                    currentBatchRunNumber = currentAttemptIndex,
                     currentBatchDownloadProgress = null,
                     batchCountdownSeconds = 0
                 ) }
 
-                val runLabel = "$runIndex of $totalRuns"
+                val runLabel = if (retryCountForThisRun == 0) {
+                    "$currentAttemptIndex of $totalRuns"
+                } else if (retryCountForThisRun == 1) {
+                    "$currentAttemptIndex of $totalRuns (retry)"
+                } else {
+                    "$currentAttemptIndex of $totalRuns (retry $retryCountForThisRun)"
+                }
+
                 val result = downloadEngine.runBenchmark(
                     fileUrl = currentUrl,
                     testConditionNote = condition,
@@ -358,6 +366,8 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
                 result.fold(
                     onSuccess = { runResult ->
                         completedRuns.add(runResult)
+                        retryCountForThisRun = 0
+                        currentAttemptIndex++
                         _uiState.update { it.copy(
                             activeBatchRuns = completedRuns.toList(),
                             recentRuns = logManager.readAllTestRuns()
@@ -365,15 +375,16 @@ class BaselineViewModel(application: Application) : AndroidViewModel(application
                     },
                     onFailure = { err ->
                         // The failed run was logged with batchId by DownloadEngine
+                        retryCountForThisRun++
                         _uiState.update { it.copy(
-                            errorMessage = "Run $runIndex failed: ${err.message}",
+                            errorMessage = "Run $currentAttemptIndex failed: ${err.message}",
                             recentRuns = logManager.readAllTestRuns()
                         ) }
                     }
                 )
 
                 // 3-second gap between runs if more runs remaining
-                if (runIndex < totalRuns && isActive) {
+                if (currentAttemptIndex <= totalRuns && isActive) {
                     for (sec in 3 downTo 1) {
                         _uiState.update { it.copy(batchCountdownSeconds = sec) }
                         delay(1000L)
