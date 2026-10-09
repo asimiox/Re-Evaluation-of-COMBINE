@@ -84,11 +84,10 @@ class WifiDirectManager(
                 WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
                     p2pManager?.requestPeers(channel) { peerList ->
                         val list = peerList?.deviceList?.toList() ?: emptyList()
-                        val previousPeersCount = _state.value.peers.size
                         val wasDiscovering = _state.value.isDiscovering
 
-                        val measuredDiscoveryTime = if (wasDiscovering && list.isNotEmpty() && _state.value.discoveryTimeMs == 0L && discoveryStartTime > 0L) {
-                            System.currentTimeMillis() - discoveryStartTime
+                        val measuredDiscoveryTime = if (list.isNotEmpty() && discoveryStartTime > 0L) {
+                            (System.currentTimeMillis() - discoveryStartTime).coerceAtLeast(1L)
                         } else {
                             _state.value.discoveryTimeMs
                         }
@@ -116,6 +115,11 @@ class WifiDirectManager(
                     }
 
                     if (networkInfo?.isConnected == true) {
+                        // Accurately capture connection time elapsed from connect() invocation
+                        if (connectionStartTime > 0L) {
+                            val elapsed = (System.currentTimeMillis() - connectionStartTime).coerceAtLeast(1L)
+                            _state.update { it.copy(connectionTimeMs = elapsed) }
+                        }
                         p2pManager?.requestConnectionInfo(channel) { info ->
                             handleConnectionEstablished(info)
                         }

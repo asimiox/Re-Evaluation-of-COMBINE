@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.GroupWork
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -34,6 +35,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.BaselineScreen
 import com.example.ui.BaselineViewModel
 import com.example.ui.CombineSplashScreen
+import com.example.ui.cooperative.CooperativeScreen
+import com.example.ui.cooperative.CooperativeViewModel
 import com.example.ui.theme.AccentGoldLight
 import com.example.ui.theme.BentoCardBorder
 import com.example.ui.theme.BentoCardSurface
@@ -74,7 +77,8 @@ class MainActivity : ComponentActivity() {
 fun MainTabbedContainer() {
     val baselineViewModel: BaselineViewModel = viewModel()
     val wifiDirectViewModel: WifiDirectViewModel = viewModel()
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: Download Test, 1: Wi-Fi Direct
+    val cooperativeViewModel: CooperativeViewModel = viewModel()
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: Download Test, 1: Wi-Fi Direct, 2: Cooperative
 
     Scaffold(
         containerColor = CanvasBackground,
@@ -87,6 +91,7 @@ fun MainTabbedContainer() {
                     .border(width = 1.dp, color = BentoCardBorder)
                     .testTag("main_bottom_nav_bar")
             ) {
+                // Tab 0: Step 1 - Single-Device Download Test
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -98,7 +103,7 @@ fun MainTabbedContainer() {
                     },
                     label = {
                         Text(
-                            text = "Download Test",
+                            text = "Download",
                             fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Medium
                         )
                     },
@@ -112,6 +117,7 @@ fun MainTabbedContainer() {
                     modifier = Modifier.testTag("nav_download_test_tab")
                 )
 
+                // Tab 1: Step 2 - Wi-Fi Direct Test
                 NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
@@ -123,7 +129,7 @@ fun MainTabbedContainer() {
                     },
                     label = {
                         Text(
-                            text = "Wi-Fi Direct Test",
+                            text = "Wi-Fi Direct",
                             fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Medium
                         )
                     },
@@ -136,6 +142,32 @@ fun MainTabbedContainer() {
                     ),
                     modifier = Modifier.testTag("nav_wifi_direct_test_tab")
                 )
+
+                // Tab 2: Step 3 - Cooperative Download
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.GroupWork,
+                            contentDescription = "Cooperative Download"
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = "Cooperative",
+                            fontWeight = if (selectedTab == 2) FontWeight.Bold else FontWeight.Medium
+                        )
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = NavyDominant,
+                        selectedTextColor = NavyDominant,
+                        indicatorColor = AccentGoldLight,
+                        unselectedIconColor = TextMuted,
+                        unselectedTextColor = TextMuted
+                    ),
+                    modifier = Modifier.testTag("nav_cooperative_test_tab")
+                )
             }
         }
     ) { innerPadding ->
@@ -147,6 +179,7 @@ fun MainTabbedContainer() {
             when (selectedTab) {
                 0 -> BaselineScreen(viewModel = baselineViewModel)
                 1 -> WifiDirectScreen(viewModel = wifiDirectViewModel)
+                2 -> CooperativeScreen(viewModel = cooperativeViewModel)
             }
         }
     }

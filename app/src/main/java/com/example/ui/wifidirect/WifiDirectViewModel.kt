@@ -262,9 +262,11 @@ class WifiDirectViewModel(application: Application) : AndroidViewModel(applicati
                 val isChargingAtStart = networkMeter.isDeviceCharging()
                 val onRouterAtStart = networkMeter.isWiFiActive()
 
+                val latestP2p = _uiState.value.p2pState
+
                 val result = transferEngine.executeTransfer(
-                    isGroupOwner = p2p.isGroupOwner,
-                    groupOwnerAddress = p2p.groupOwnerAddress,
+                    isGroupOwner = latestP2p.isGroupOwner,
+                    groupOwnerAddress = latestP2p.groupOwnerAddress,
                     isSender = _uiState.value.selectedRole == P2pRole.SENDER,
                     payloadSizeBytes = payloadBytes
                 ) { progress ->
@@ -279,15 +281,15 @@ class WifiDirectViewModel(application: Application) : AndroidViewModel(applicati
                             timestamp = startTimeWall,
                             role = roleStr,
                             deviceModel = _uiState.value.deviceModel,
-                            peerDeviceName = p2p.connectedPeerName,
+                            peerDeviceName = latestP2p.connectedPeerName,
                             payloadSizeBytes = execResult.payloadSizeBytes,
-                            discoveryTimeMs = p2p.discoveryTimeMs,
-                            connectionTimeMs = p2p.connectionTimeMs,
+                            discoveryTimeMs = latestP2p.discoveryTimeMs,
+                            connectionTimeMs = latestP2p.connectionTimeMs,
                             transferTimeSeconds = execResult.transferTimeSeconds,
                             localThroughputMbps = execResult.localThroughputMbps,
                             bytesReceivedOk = execResult.bytesReceivedOk,
                             connectedToWifiRouter = onRouterAtStart,
-                            p2pFrequencyMhz = p2p.p2pFrequencyMhz,
+                            p2pFrequencyMhz = latestP2p.p2pFrequencyMhz,
                             batteryBefore = batteryBefore,
                             batteryAfter = batteryAfter,
                             isCharging = isChargingAtStart,
@@ -320,15 +322,15 @@ class WifiDirectViewModel(application: Application) : AndroidViewModel(applicati
                             timestamp = startTimeWall,
                             role = roleStr,
                             deviceModel = _uiState.value.deviceModel,
-                            peerDeviceName = p2p.connectedPeerName,
+                            peerDeviceName = latestP2p.connectedPeerName,
                             payloadSizeBytes = payloadBytes,
-                            discoveryTimeMs = p2p.discoveryTimeMs,
-                            connectionTimeMs = p2p.connectionTimeMs,
+                            discoveryTimeMs = latestP2p.discoveryTimeMs,
+                            connectionTimeMs = latestP2p.connectionTimeMs,
                             transferTimeSeconds = 0.0,
                             localThroughputMbps = 0.0,
                             bytesReceivedOk = false,
                             connectedToWifiRouter = onRouterAtStart,
-                            p2pFrequencyMhz = p2p.p2pFrequencyMhz,
+                            p2pFrequencyMhz = latestP2p.p2pFrequencyMhz,
                             batteryBefore = batteryBefore,
                             batteryAfter = batteryAfter,
                             isCharging = isChargingAtStart,

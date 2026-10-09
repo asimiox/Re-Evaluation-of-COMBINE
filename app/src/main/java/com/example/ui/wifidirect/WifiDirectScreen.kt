@@ -515,6 +515,23 @@ private fun BentoP2pHeroCard(
                             text = "Coordinator IP: ${p2p.groupOwnerAddress} • Role: ${if (p2p.isGroupOwner) "Coordinator" else "Client"}",
                             style = MaterialTheme.typography.labelSmall.copy(color = TextMuted)
                         )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            if (p2p.discoveryTimeMs > 0L) {
+                                Text(
+                                    text = "Discovery: ${p2p.discoveryTimeMs}ms",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = NavySecondary, fontWeight = FontWeight.SemiBold)
+                                )
+                            }
+                            if (p2p.connectionTimeMs > 0L) {
+                                Text(
+                                    text = "Connection: ${p2p.connectionTimeMs}ms",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = NavySecondary, fontWeight = FontWeight.SemiBold)
+                                )
+                            }
+                        }
                     }
                     OutlinedButton(
                         onClick = onDisconnect,
@@ -1581,6 +1598,27 @@ private fun BentoP2pRunItem(run: WifiDirectRunResult) {
                         text = "Run ${run.runNumberInBatch}",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, color = NavySecondary)
                     )
+                }
+            }
+
+            // Discovery and Connection Timings
+            if (run.discoveryTimeMs > 0L || run.connectionTimeMs > 0L) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (run.discoveryTimeMs > 0L) {
+                        Text(
+                            text = "Discovery: ${run.discoveryTimeMs}ms",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = NavySecondary, fontWeight = FontWeight.Medium)
+                        )
+                    }
+                    if (run.connectionTimeMs > 0L) {
+                        Text(
+                            text = "• Connection: ${run.connectionTimeMs}ms",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = NavySecondary, fontWeight = FontWeight.Medium)
+                        )
+                    }
                 }
             }
 
