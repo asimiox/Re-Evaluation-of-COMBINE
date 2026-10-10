@@ -35,9 +35,20 @@ class NetworkBindingHelper(private val context: Context) {
         findCurrentNetworks()
     }
 
+    fun hasInternet(network: Network?): Boolean {
+        if (network == null) return false
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+    }
+
     fun findCurrentNetworks() {
         for (network in connectivityManager.allNetworks) {
             val caps = connectivityManager.getNetworkCapabilities(network) ?: continue
+            val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            if (!hasInternet) continue // Never bind to local P2P or non-internet interfaces
+
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                 _wifiNetwork.value = network
             }
@@ -97,7 +108,7 @@ class NetworkBindingHelper(private val context: Context) {
             .followRedirects(true)
             .followSslRedirects(true)
 
-        if (targetNetwork != null) {
+        if (targetNetwork != null && hasInternet(targetNetwork)) {
             builder.socketFactory(targetNetwork.socketFactory)
             builder.dns(object : Dns {
                 override fun lookup(hostname: String): List<InetAddress> {

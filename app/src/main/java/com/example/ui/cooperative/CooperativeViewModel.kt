@@ -50,18 +50,32 @@ val COOP_URL_PRESETS = listOf(
         description = "Official Falkenstein DC Mirror (Range Supported)"
     ),
     CoopUrlPreset(
+        id = "tele2_100mb",
+        label = "Tele2 100MB",
+        sizeLabel = "100 MB",
+        url = "http://speedtest.tele2.net/100MB.zip",
+        description = "Tele2 Global High-Speed Mirror (Range Supported)"
+    ),
+    CoopUrlPreset(
+        id = "hetzner_nbg",
+        label = "Hetzner NBG 100MB",
+        sizeLabel = "100 MB",
+        url = "https://nbg1-speed.hetzner.com/100MB.bin",
+        description = "Hetzner Nuremberg Mirror (Range Supported)"
+    ),
+    CoopUrlPreset(
+        id = "hetzner_ash",
+        label = "Hetzner US 100MB",
+        sizeLabel = "100 MB",
+        url = "https://ash-speed.hetzner.com/100MB.bin",
+        description = "Hetzner Ashburn DC Mirror (Range Supported)"
+    ),
+    CoopUrlPreset(
         id = "hetzner_1gb",
         label = "Hetzner 1GB",
         sizeLabel = "1 GB",
         url = "https://fsn1-speed.hetzner.com/1GB.bin",
-        description = "Large sustained benchmark mirror"
-    ),
-    CoopUrlPreset(
-        id = "cf_100mb",
-        label = "Cloudflare 100MB",
-        sizeLabel = "100 MB",
-        url = "https://speed.cloudflare.com/__down?bytes=100000000",
-        description = "Global Anycast Edge (Range Supported)"
+        description = "Large sustained benchmark mirror (1024 MB)"
     )
 )
 
@@ -318,7 +332,9 @@ class CooperativeViewModel(application: Application) : AndroidViewModel(applicat
                         chunkSizeBytes = chunkSize,
                         conditionNote = condition,
                         batchId = batchId,
-                        runLabel = runLabel
+                        runLabel = runLabel,
+                        isGroupOwner = state.p2pState.isGroupOwner,
+                        groupOwnerAddress = state.p2pState.groupOwnerAddress
                     ) { prog ->
                         _uiState.update { it.copy(liveProgress = prog) }
                     }
@@ -346,6 +362,11 @@ class CooperativeViewModel(application: Application) : AndroidViewModel(applicat
                         }
                     }
                 )
+
+                if (retryCountForThisRun >= 2) {
+                    // Abort loop on repeated failures to prevent infinite retry loop
+                    break
+                }
 
                 // 3-second gap between runs if more remain
                 if (currentAttemptIndex <= totalRuns && isActive) {
@@ -376,7 +397,9 @@ class CooperativeViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun startHelperWorker() {
-        val coordinatorIp = _uiState.value.p2pState.groupOwnerAddress.ifBlank { "192.168.49.1" }
+        val p2p = _uiState.value.p2pState
+        val isGo = p2p.isGroupOwner
+        val goAddress = p2p.groupOwnerAddress.ifBlank { "192.168.49.1" }
         benchmarkJob?.cancel()
 
         _uiState.update {
@@ -388,7 +411,10 @@ class CooperativeViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         benchmarkJob = viewModelScope.launch {
-            val result = engine.executeHelperWorker(coordinatorIp) { msg ->
+            val result = engine.executeHelperWorker(
+                isGroupOwner = isGo,
+                groupOwnerAddress = goAddress
+            ) { msg ->
                 _uiState.update { it.copy(helperStatusText = msg) }
             }
 

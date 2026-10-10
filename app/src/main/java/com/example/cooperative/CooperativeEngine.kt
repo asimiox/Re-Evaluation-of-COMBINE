@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -19,6 +20,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -27,6 +29,7 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.InetSocketAddress
+import java.net.ProtocolException
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
@@ -113,56 +116,120 @@ class CooperativeEngine(
 
     /**
      * Checks if server supports Accept-Ranges and returns file size.
+     * Probes directly via a 1-byte GET Range request (Range: bytes=0-0) to avoid servers
+     * (like Hetzner) that drop or reject HTTP HEAD requests.
      */
     suspend fun probeUrl(fileUrl: String, client: OkHttpClient): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            // First send HEAD request
-            val headRequest = Request.Builder()
+            val rangeProbe = Request.Builder()
                 .url(fileUrl)
-                .head()
-                .header("User-Agent", "Mozilla/5.0 COMBINE-Benchmark/2.0")
+                .header("Range", "bytes=0-0")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) COMBINE-Benchmark/2.0")
+                .header("Accept", "*/*")
+                .header("Connection", "close")
                 .build()
 
-            val response = client.newCall(headRequest).execute()
-            val acceptRanges = response.header("Accept-Ranges")
-            var contentLength = response.header("Content-Length")?.toLongOrNull() ?: -1L
-            val isSuccess = response.isSuccessful
-            response.close()
-
-            // If HEAD does not expose ranges or failed, probe with 1-byte Range request
-            if (!isSuccess || contentLength <= 0L || acceptRanges?.contains("bytes", ignoreCase = true) != true) {
-                val rangeProbe = Request.Builder()
-                    .url(fileUrl)
-                    .header("Range", "bytes=0-0")
-                    .header("User-Agent", "Mozilla/5.0 COMBINE-Benchmark/2.0")
-                    .build()
-
-                val probeResp = client.newCall(rangeProbe).execute()
-                if (probeResp.code != 206) {
-                    probeResp.close()
-                    return@withContext Result.failure(
-                        Exception("Server returned HTTP ${probeResp.code}. Server does not support HTTP byte-range requests (Accept-Ranges: bytes is required).")
-                    )
-                }
-                val contentRange = probeResp.header("Content-Range")
+            val probeResp = client.newCall(rangeProbe).execute()
+            if (probeResp.code != 206) {
+                val code = probeResp.code
                 probeResp.close()
+                return@withContext Result.failure(
+                    Exception("Server returned HTTP $code. Server does not support HTTP byte-range requests (HTTP 206 Partial Content required).")
+                )
+            }
 
-                if (contentRange != null && contentRange.contains("/")) {
-                    val total = contentRange.substringAfter("/").trim().toLongOrNull()
-                    if (total != null && total > 0) {
-                        contentLength = total
-                    }
-                }
+            val contentRange = probeResp.header("Content-Range")
+            probeResp.close()
+
+            var contentLength = -1L
+            if (contentRange != null && contentRange.contains("/")) {
+                val totalStr = contentRange.substringAfter("/").trim()
+                contentLength = totalStr.toLongOrNull() ?: -1L
             }
 
             if (contentLength <= 0L) {
-                return@withContext Result.failure(Exception("Could not determine file size from server."))
+                return@withContext Result.failure(Exception("Could not determine total file size from server response (Content-Range: $contentRange)."))
             }
 
             Result.success(contentLength)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private suspend fun connectWithRetry(
+        targetIp: String,
+        port: Int,
+        maxAttempts: Int = 30,
+        delayMs: Long = 1000L
+    ): Socket = withContext(Dispatchers.IO) {
+        var lastException: Exception? = null
+        for (attempt in 1..maxAttempts) {
+            if (isCancelled) throw CancellationException("Cancelled")
+            val socket = Socket()
+            try {
+                socket.tcpNoDelay = true
+                socket.soTimeout = SOCKET_TIMEOUT_MS
+                socket.connect(InetSocketAddress(targetIp, port), 4000)
+                activeSocket = socket
+                return@withContext socket
+            } catch (e: Exception) {
+                lastException = e
+                try { socket.close() } catch (_: Exception) {}
+                delay(delayMs)
+            }
+        }
+        throw lastException ?: IOException("Failed to connect to $targetIp:$port after $maxAttempts attempts")
+    }
+
+    private suspend fun downloadChunk(
+        client: OkHttpClient,
+        fileUrl: String,
+        startByte: Long,
+        endByte: Long,
+        chunkId: Int,
+        maxRetries: Int = 3
+    ): ByteArray {
+        var lastError: Exception? = null
+        val expectedSize = (endByte - startByte + 1).toInt()
+        for (attempt in 1..maxRetries) {
+            if (isCancelled) throw CancellationException("Cancelled")
+            var response: Response? = null
+            try {
+                val req = Request.Builder()
+                    .url(fileUrl)
+                    .header("Range", "bytes=$startByte-$endByte")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) COMBINE-Benchmark/2.0")
+                    .header("Accept", "*/*")
+                    .header("Connection", "keep-alive")
+                    .build()
+
+                response = client.newCall(req).execute()
+                if (!response.isSuccessful && response.code != 206) {
+                    val code = response.code
+                    response.close()
+                    throw IOException("HTTP $code on chunk $chunkId")
+                }
+                val body = response.body ?: throw IOException("Empty body on chunk $chunkId")
+                val bytes = body.bytes()
+                body.close()
+
+                if (bytes.size != expectedSize) {
+                    throw ProtocolException("Incomplete chunk $chunkId: got ${bytes.size} bytes, expected $expectedSize")
+                }
+                return bytes
+            } catch (e: Exception) {
+                lastError = e
+                try {
+                    response?.close()
+                } catch (_: Exception) {}
+                if (isCancelled) throw e
+                if (attempt < maxRetries) {
+                    delay(200L * attempt)
+                }
+            }
+        }
+        throw lastError ?: IOException("Failed to download chunk $chunkId after $maxRetries retries")
     }
 
     // =========================================================================
@@ -185,8 +252,10 @@ class CooperativeEngine(
         val coordinatorNetType = networkMeter.getNetworkType()
         val coordinatorDevice = networkMeter.getDeviceDescription()
 
-        // Coordinator uses default/WiFi bound client
-        val client = bindingHelper.createBoundClient(bindingHelper.wifiNetwork.value)
+        // Coordinator uses WiFi if available with internet, otherwise default active internet network
+        val wifiNet = bindingHelper.wifiNetwork.value
+        val internetNet = if (wifiNet != null && bindingHelper.hasInternet(wifiNet)) wifiNet else null
+        val client = bindingHelper.createBoundClient(internetNet)
 
         val probeResult = probeUrl(fileUrl, client)
         if (probeResult.isFailure) {
@@ -216,21 +285,7 @@ class CooperativeEngine(
             for (chunk in chunks) {
                 if (isCancelled) throw CancellationException("Solo download cancelled.")
 
-                val request = Request.Builder()
-                    .url(fileUrl)
-                    .header("Range", "bytes=${chunk.startByte}-${chunk.endByte}")
-                    .header("User-Agent", "Mozilla/5.0 COMBINE-Benchmark/2.0")
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (!response.isSuccessful && response.code != 206) {
-                    response.close()
-                    throw IOException("HTTP ${response.code} downloading chunk ${chunk.id}")
-                }
-
-                val body = response.body ?: throw IOException("Empty body chunk ${chunk.id}")
-                val bytes = body.bytes()
-                body.close()
+                val bytes = downloadChunk(client, fileUrl, chunk.startByte, chunk.endByte, chunk.id, maxRetries = 3)
 
                 raf.seek(chunk.startByte)
                 raf.write(bytes)
@@ -321,6 +376,8 @@ class CooperativeEngine(
         conditionNote: String,
         batchId: String,
         runLabel: String,
+        isGroupOwner: Boolean,
+        groupOwnerAddress: String,
         onProgress: (CooperativeProgress) -> Unit
     ): Result<CooperativeRunResult> = withContext(Dispatchers.IO) {
         isCancelled = false
@@ -332,8 +389,10 @@ class CooperativeEngine(
         val coordinatorNetType = networkMeter.getNetworkType()
         val coordinatorDevice = networkMeter.getDeviceDescription()
 
-        // Coordinator HTTP client bound to WiFi
-        val client = bindingHelper.createBoundClient(bindingHelper.wifiNetwork.value)
+        // Coordinator HTTP client bound to WiFi (if internet present) or default internet
+        val wifiNet = bindingHelper.wifiNetwork.value
+        val internetNet = if (wifiNet != null && bindingHelper.hasInternet(wifiNet)) wifiNet else null
+        val client = bindingHelper.createBoundClient(internetNet)
 
         val probeResult = probeUrl(fileUrl, client)
         if (probeResult.isFailure) {
@@ -357,35 +416,59 @@ class CooperativeEngine(
         raf.setLength(fileSize)
         val fileMutex = Mutex()
 
-        // Accept Helper connection over P2P port 8990
-        val serverSocket = ServerSocket().apply {
-            reuseAddress = true
-            bind(InetSocketAddress(COOP_PORT))
-            soTimeout = 40000
-        }
-        activeServerSocket = serverSocket
-
-        onProgress(
-            CooperativeProgress(
-                bytesTotalExpected = fileSize,
-                bytesFromCoordinator = 0L,
-                bytesFromHelper = 0L,
-                chunksTotal = totalChunks,
-                chunksFromCoordinator = 0,
-                chunksFromHelper = 0,
-                elapsedSeconds = 0.0,
-                currentThroughputMbps = 0.0,
-                statusText = "Waiting for Helper phone to connect on port $COOP_PORT..."
+        // Symmetrical P2P socket establishment: Group Owner listens; Client connects to GO
+        val socket: Socket = if (isGroupOwner) {
+            onProgress(
+                CooperativeProgress(
+                    bytesTotalExpected = fileSize,
+                    bytesFromCoordinator = 0L,
+                    bytesFromHelper = 0L,
+                    chunksTotal = totalChunks,
+                    chunksFromCoordinator = 0,
+                    chunksFromHelper = 0,
+                    elapsedSeconds = 0.0,
+                    currentThroughputMbps = 0.0,
+                    statusText = "Waiting for Helper phone to connect on port $COOP_PORT..."
+                )
             )
-        )
-
-        val socket = try {
-            serverSocket.accept()
-        } catch (e: Exception) {
-            raf.close()
-            tempFile.delete()
-            serverSocket.close()
-            return@withContext Result.failure(Exception("Timeout waiting for Helper phone to connect."))
+            val serverSocket = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(COOP_PORT))
+                soTimeout = 45000
+            }
+            activeServerSocket = serverSocket
+            try {
+                serverSocket.accept()
+            } catch (e: Exception) {
+                raf.close()
+                tempFile.delete()
+                serverSocket.close()
+                return@withContext Result.failure(Exception("Timeout waiting for Helper phone to connect: ${e.message}"))
+            } finally {
+                serverSocket.close()
+            }
+        } else {
+            val targetIp = groupOwnerAddress.ifBlank { "192.168.49.1" }
+            onProgress(
+                CooperativeProgress(
+                    bytesTotalExpected = fileSize,
+                    bytesFromCoordinator = 0L,
+                    bytesFromHelper = 0L,
+                    chunksTotal = totalChunks,
+                    chunksFromCoordinator = 0,
+                    chunksFromHelper = 0,
+                    elapsedSeconds = 0.0,
+                    currentThroughputMbps = 0.0,
+                    statusText = "Connecting to Helper at $targetIp:$COOP_PORT..."
+                )
+            )
+            try {
+                connectWithRetry(targetIp, COOP_PORT, maxAttempts = 30)
+            } catch (e: Exception) {
+                raf.close()
+                tempFile.delete()
+                return@withContext Result.failure(Exception("Could not connect to Helper ($targetIp:$COOP_PORT): ${e.message}"))
+            }
         }
         activeSocket = socket
         socket.soTimeout = SOCKET_TIMEOUT_MS
@@ -432,21 +515,8 @@ class CooperativeEngine(
                     while (!isFinished.get() && !isCancelled && isActive) {
                         val chunk = workQueue.poll() ?: break
 
-                        val req = Request.Builder()
-                            .url(fileUrl)
-                            .header("Range", "bytes=${chunk.startByte}-${chunk.endByte}")
-                            .header("User-Agent", "Mozilla/5.0 COMBINE-Benchmark/2.0")
-                            .build()
-
                         try {
-                            val resp = client.newCall(req).execute()
-                            if (!resp.isSuccessful && resp.code != 206) {
-                                resp.close()
-                                throw IOException("HTTP ${resp.code}")
-                            }
-                            val body = resp.body ?: throw IOException("Empty body")
-                            val bytes = body.bytes()
-                            body.close()
+                            val bytes = downloadChunk(client, fileUrl, chunk.startByte, chunk.endByte, chunk.id, maxRetries = 3)
 
                             fileMutex.withLock {
                                 raf.seek(chunk.startByte)
@@ -669,11 +739,11 @@ class CooperativeEngine(
     // 3. POOLED DOWNLOAD: HELPER WORKER (Runs on Phone B)
     // =========================================================================
     suspend fun executeHelperWorker(
-        coordinatorIp: String,
+        isGroupOwner: Boolean,
+        groupOwnerAddress: String,
         onProgress: (String) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
         isCancelled = false
-        onProgress("Connecting to Coordinator ($coordinatorIp:$COOP_PORT)...")
 
         // Helper requests and holds active cellular network
         bindingHelper.acquireCellularNetwork()
@@ -681,16 +751,36 @@ class CooperativeEngine(
         val client = bindingHelper.createBoundClient(cellularNet)
         val cellularLabel = bindingHelper.getActiveNetworkLabel(cellularNet)
 
-        val socket = Socket()
+        // Symmetrical P2P socket establishment: Group Owner listens; Client connects to GO
+        val socket: Socket = if (isGroupOwner) {
+            onProgress("Helper is Group Owner: waiting on port $COOP_PORT for Coordinator...")
+            val serverSocket = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(COOP_PORT))
+                soTimeout = 45000
+            }
+            activeServerSocket = serverSocket
+            try {
+                serverSocket.accept()
+            } catch (e: Exception) {
+                serverSocket.close()
+                bindingHelper.releaseCellularNetwork()
+                return@withContext Result.failure(Exception("Timeout waiting for Coordinator to connect: ${e.message}"))
+            } finally {
+                serverSocket.close()
+            }
+        } else {
+            val targetIp = groupOwnerAddress.ifBlank { "192.168.49.1" }
+            onProgress("Connecting to Coordinator ($targetIp:$COOP_PORT)...")
+            try {
+                connectWithRetry(targetIp, COOP_PORT, maxAttempts = 30)
+            } catch (e: Exception) {
+                bindingHelper.releaseCellularNetwork()
+                return@withContext Result.failure(Exception("Could not connect to Coordinator ($targetIp:$COOP_PORT): ${e.message}"))
+            }
+        }
         activeSocket = socket
         socket.tcpNoDelay = true
-
-        try {
-            socket.connect(InetSocketAddress(coordinatorIp, COOP_PORT), 25000)
-        } catch (e: Exception) {
-            bindingHelper.releaseCellularNetwork()
-            return@withContext Result.failure(Exception("Could not connect to Coordinator ($coordinatorIp:$COOP_PORT)"))
-        }
         socket.soTimeout = SOCKET_TIMEOUT_MS
 
         val dis = DataInputStream(BufferedInputStream(socket.getInputStream()))
@@ -767,20 +857,7 @@ class CooperativeEngine(
                                 onProgress("Downloading chunk $chunkId (${startByte}-${endByte}) via Cellular...")
 
                                 try {
-                                    val req = Request.Builder()
-                                        .url(fileUrl)
-                                        .header("Range", "bytes=$startByte-$endByte")
-                                        .header("User-Agent", "Mozilla/5.0 COMBINE-Benchmark/2.0")
-                                        .build()
-
-                                    val resp = client.newCall(req).execute()
-                                    if (!resp.isSuccessful && resp.code != 206) {
-                                        resp.close()
-                                        throw IOException("HTTP ${resp.code}")
-                                    }
-                                    val body = resp.body ?: throw IOException("Empty body")
-                                    val bytes = body.bytes()
-                                    body.close()
+                                    val bytes = downloadChunk(client, fileUrl, startByte, endByte, chunkId, maxRetries = 3)
 
                                     // Pipeline: send to P2P socket channel
                                     payloadChannel.send(HelperChunkPayload(chunkId, startByte, endByte, bytes))

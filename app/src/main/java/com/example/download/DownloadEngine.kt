@@ -37,16 +37,18 @@ private class RobustDns : Dns {
             // Fall through to fallback
         }
 
-        // Hardcoded Anycast IPs if carrier/local DNS lookup fails
+        try {
+            val fallback = InetAddress.getAllByName(hostname).toList()
+            if (fallback.isNotEmpty()) return fallback
+        } catch (_: Exception) {}
+
+        // Known datacenter IPs if carrier/local DNS lookup fails
         return when {
-            hostname.equals("speed.cloudflare.com", ignoreCase = true) -> {
-                listOf(
-                    InetAddress.getByName("104.16.123.96"),
-                    InetAddress.getByName("104.16.124.96")
-                )
-            }
             hostname.contains("hetzner", ignoreCase = true) -> {
                 listOf(InetAddress.getByName("78.46.170.2"))
+            }
+            hostname.contains("ovh", ignoreCase = true) -> {
+                listOf(InetAddress.getByName("188.165.12.106"))
             }
             else -> throw UnknownHostException("Unable to resolve host \"$hostname\": check your device internet connection.")
         }

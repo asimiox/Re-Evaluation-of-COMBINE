@@ -37,25 +37,11 @@ data class PresetFile(
 
 val HETZNER_PRESET_FILES = listOf(
     PresetFile(
-        id = "small_10mb",
-        label = "Small (10MB)",
+        id = "tele2_10mb",
+        label = "Tele2 (10MB)",
         sizeLabel = "10 MB",
-        url = "https://speed.cloudflare.com/__down?bytes=10000000",
-        description = "Cloudflare Global Anycast (Fast & 100% reliable for batch runs)"
-    ),
-    PresetFile(
-        id = "med_25mb",
-        label = "Medium (25MB)",
-        sizeLabel = "25 MB",
-        url = "https://speed.cloudflare.com/__down?bytes=25000000",
-        description = "Cloudflare Anycast 25MB test file for mobile broadband"
-    ),
-    PresetFile(
-        id = "large_100mb",
-        label = "Large (100MB)",
-        sizeLabel = "100 MB",
-        url = "https://speed.cloudflare.com/__down?bytes=100000000",
-        description = "Cloudflare Anycast 100MB high-throughput test"
+        url = "http://speedtest.tele2.net/10MB.zip",
+        description = "Tele2 High-Speed 10MB test file (Fast & 100% reliable)"
     ),
     PresetFile(
         id = "hetzner_100mb",
@@ -63,6 +49,20 @@ val HETZNER_PRESET_FILES = listOf(
         sizeLabel = "100 MB",
         url = "https://fsn1-speed.hetzner.com/100MB.bin",
         description = "Hetzner Falkenstein official datacenter mirror"
+    ),
+    PresetFile(
+        id = "tele2_100mb",
+        label = "Tele2 (100MB)",
+        sizeLabel = "100 MB",
+        url = "http://speedtest.tele2.net/100MB.zip",
+        description = "Tele2 Global 100MB speedtest file"
+    ),
+    PresetFile(
+        id = "hetzner_nbg_100mb",
+        label = "Hetzner NBG (100MB)",
+        sizeLabel = "100 MB",
+        url = "https://nbg1-speed.hetzner.com/100MB.bin",
+        description = "Hetzner Nuremberg datacenter mirror"
     )
 )
 
@@ -76,8 +76,8 @@ val CONDITION_NOTE_PRESETS = listOf(
 )
 
 data class BaselineUiState(
-    val fileUrl: String = "https://speed.cloudflare.com/__down?bytes=10000000",
-    val selectedPresetId: String? = "small_10mb",
+    val fileUrl: String = "http://speedtest.tele2.net/10MB.zip",
+    val selectedPresetId: String? = "tele2_10mb",
     val conditionNote: String = "Indoor",
     val batchRunsPlannedCount: Int = 10,
 
